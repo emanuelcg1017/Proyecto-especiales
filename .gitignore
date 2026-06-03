@@ -1,0 +1,23 @@
+# entorno virtual
+venv/
+.venv/
+env/
+
+# datasets (NO subir)
+dataset/
+data/
+images/
+videos/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# archivos temporales
+tempCodeRunnerFile.py
+
+# logs
+*.log
+
+# variables de entorno
+.env

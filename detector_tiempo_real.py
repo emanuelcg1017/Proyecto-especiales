@@ -7,26 +7,15 @@ import threading
 from collections import deque
 from tensorflow.keras.models import load_model
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
-
-RUTA_MODELO = 'modelos/detector_somnolencia.h5'
-IMG_SIZE    = (64, 64)
-CLASES      = ['Alerta', 'Dormido']
-COLORES     = {0: (40,200,40), 1: (40,40,220)}
-
-# ============================================================
-# CARGAR MODELO
-# ============================================================
+RUTA_MODELO     = 'modelos/detector_somnolencia.h5'
+IMG_SIZE        = (64, 64)
+EAR_THRESHOLD   = 0.25
+UMBRAL_DORMIDO  = 0.50
+FRAMES_ALERTA   = 8
+COOLDOWN_PITIDO = 3
 
 print('Cargando modelo...')
 model = load_model(RUTA_MODELO)
-print('Modelo cargado correctamente')
-
-# ============================================================
-# MEDIAPIPE
-# ============================================================
 
 mp_face   = mp.solutions.face_mesh
 face_mesh = mp_face.FaceMesh(
@@ -36,15 +25,23 @@ face_mesh = mp_face.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-# ============================================================
-# AUDIO
-# ============================================================
-
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+ultimo_pitido = 0
 
-# ============================================================
-# PUNTOS DE LOS OJOS
-# ============================================================
+def generar_pitido():
+    global ultimo_pitido
+    ahora = time.time()
+    if ahora - ultimo_pitido < COOLDOWN_PITIDO:
+        return
+    ultimo_pitido = ahora
+    def sonar():
+        sr   = 44100
+        t    = np.linspace(0, 0.3, int(sr * 0.3), False)
+        onda = (np.sin(2 * np.pi * 880 * t) * 32767).astype(np.int16)
+        onda = np.column_stack([onda, onda])
+        pygame.sndarray.make_sound(onda).play()
+        pygame.time.wait(400)
+    threading.Thread(target=sonar, daemon=True).start()
 
 OJO_IZQ = [33, 160, 158, 133, 153, 144]
 OJO_DER = [362, 385, 387, 263, 373, 380]
@@ -56,17 +53,27 @@ def calcular_EAR(landmarks, indices, w, h):
     C = np.linalg.norm(np.array(pts[0]) - np.array(pts[3]))
     return (A + B) / (2.0 * C)
 
-# ============================================================
-# EXTRAER CARA COMPLETA — igual que el dataset
-# ============================================================
+def ajustar_iluminacion(roi):
+    lab     = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe   = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    l       = clahe.apply(l)
+    roi     = cv2.cvtColor(cv2.merge((l,a,b)), cv2.COLOR_LAB2RGB)
+    roi     = cv2.convertScaleAbs(roi, alpha=1.2, beta=20)
+    return roi
 
-def extraer_cara(frame, landmarks, w, h):
-    pts = np.array([
-        (int(lm.x*w), int(lm.y*h))
-        for lm in landmarks
-    ])
-    x, y, bw, bh = cv2.boundingRect(pts)
-    margen = 30
+def preprocesar_roi(roi):
+    roi = ajustar_iluminacion(roi)
+    roi = cv2.resize(roi, IMG_SIZE)
+    roi = roi.astype(np.float32) / 255.0
+    roi = (roi - np.mean(roi)) / (np.std(roi) + 1e-6)
+    return np.expand_dims(roi, axis=0)
+
+def extraer_ojos(frame, landmarks, w, h):
+    pts = [(int(landmarks[i].x*w), int(landmarks[i].y*h))
+           for i in (OJO_IZQ + OJO_DER)]
+    x, y, bw, bh = cv2.boundingRect(np.array(pts))
+    margen = 25
     x1 = max(0, x - margen)
     y1 = max(0, y - margen)
     x2 = min(w, x + bw + margen)
@@ -74,44 +81,11 @@ def extraer_cara(frame, landmarks, w, h):
     roi = frame[y1:y2, x1:x2]
     if roi.size == 0:
         return None
-    return cv2.resize(roi, IMG_SIZE)
+    return preprocesar_roi(roi)
 
-# ============================================================
-# ALERTAS
-# ============================================================
-
-frames_peligrosos = 0
-UMBRAL_FRAMES     = 10
-ultimo_alerta     = 0
-COOLDOWN_SEG      = 4
-
-def activar_alerta(clase):
-    global frames_peligrosos, ultimo_alerta
-    ahora = time.time()
-    if clase == 1:
-        frames_peligrosos += 1
-    else:
-        frames_peligrosos = max(0, frames_peligrosos - 1)
-    if frames_peligrosos >= UMBRAL_FRAMES and ahora - ultimo_alerta > COOLDOWN_SEG:
-        ultimo_alerta     = ahora
-        frames_peligrosos = 0
-        def sonar():
-            sr   = 44100
-            t    = np.linspace(0, 0.5, int(sr*0.5), False)
-            wave = (np.sin(2*np.pi*880*t)*32767).astype(np.int16)
-            wave = np.column_stack([wave, wave])
-            pygame.sndarray.make_sound(wave).play()
-        threading.Thread(target=sonar, daemon=True).start()
-
-# ============================================================
-# SUAVIZADO
-# ============================================================
-
-buffer = deque(maxlen=5)
-
-# ============================================================
-# CÁMARA
-# ============================================================
+frames_dormido = 0
+buffer         = deque(maxlen=5)
+color_actual   = [40, 200, 40]
 
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
@@ -119,7 +93,7 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 print('Iniciando detección... ESC para salir')
 
-fps_time = time.time()
+fps_time    = time.time()
 fps_counter = fps_display = 0
 
 while cap.isOpened():
@@ -138,9 +112,10 @@ while cap.isOpened():
     rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb)
 
-    estado    = "Sin deteccion"
-    confianza = 0.0
-    color     = (120, 120, 120)
+    estado       = "Sin deteccion"
+    prob_dormido = 0.0
+    prob_alerta  = 0.0
+    color_meta   = (120, 120, 120)
 
     if results.multi_face_landmarks:
 
@@ -151,47 +126,72 @@ while cap.isOpened():
             calcular_EAR(landmarks, OJO_DER, w, h)
         ) / 2.0
 
-        # Extrae la cara completa igual que el dataset
-        roi = extraer_cara(frame, landmarks, w, h)
+        roi = extraer_ojos(frame, landmarks, w, h)
 
         if roi is not None:
 
-            cv2.imshow("Lo que ve el modelo", roi)
-
-            x_in  = roi.astype(np.float32) / 255.0
-            x_in  = np.expand_dims(x_in, axis=0)
-            probs = model.predict(x_in, verbose=0)[0]
-
-            print(f"Alerta={probs[0]:.3f}  Dormido={probs[1]:.3f}  EAR={ear:.3f}")
-
+            probs        = model.predict(roi, verbose=0)[0]
             buffer.append(probs)
-            probs_suav = np.mean(buffer, axis=0)
+            probs_suav   = np.mean(buffer, axis=0)
 
-            clase     = int(np.argmax(probs_suav))
-            confianza = float(probs_suav[clase])
-            estado    = CLASES[clase]
-            color     = COLORES[clase]
+            prob_dormido = float(probs_suav[0])
+            prob_alerta  = float(probs_suav[1])
 
-            activar_alerta(clase)
+            ojos_cerrados = ear < EAR_THRESHOLD
+
+            if ojos_cerrados and prob_dormido < 0.5:
+                prob_dormido = 0.6
+
+            if ojos_cerrados or prob_dormido > prob_alerta:
+                frames_dormido += 1
+            else:
+                frames_dormido = max(0, frames_dormido - 1)
+
+            if frames_dormido >= FRAMES_ALERTA:
+                estado     = "DORMIDO"
+                color_meta = (40, 40, 220)
+                if prob_dormido > UMBRAL_DORMIDO:
+                    generar_pitido()
+            else:
+                estado     = "ALERTA"
+                color_meta = (40, 200, 40)
+
+            for i in range(3):
+                color_actual[i] += int(
+                    (color_meta[i] - color_actual[i]) * 0.2
+                )
 
             cv2.putText(frame, f"EAR: {ear:.3f}",
-                (10, h-20), cv2.FONT_HERSHEY_SIMPLEX,
-                0.6, (200,200,200), 1)
+                        (10, h-20),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (200,200,200), 1)
 
-    # ── Overlay ──────────────────────────────────────────────
+    color_suave = tuple(color_actual)
+
     overlay = frame.copy()
-    cv2.rectangle(overlay, (0,0), (w,70), (0,0,0), -1)
+    cv2.rectangle(overlay, (0,0), (w, 70), color_suave, -1)
     cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
 
-    cv2.putText(frame, f"{estado}  {confianza:.0%}",
-        (15,45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 2)
+    if estado == "DORMIDO":
+        texto = f"DORMIDO  {prob_dormido:.0%}"
+    elif estado == "ALERTA":
+        texto = f"ALERTA  {prob_alerta:.0%}"
+    else:
+        texto = "Sin deteccion"
+
+    cv2.putText(frame, texto,
+                (15, 45),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.2, (255,255,255), 2)
 
     cv2.putText(frame, f"{fps_display} fps",
-        (w-90,25), cv2.FONT_HERSHEY_SIMPLEX,
-        0.6, (180,180,180), 1)
+                (w-90, 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (180,180,180), 1)
 
-    if frames_peligrosos > 10:
-        cv2.rectangle(frame, (0,0), (w-1,h-1), (0,0,255), 6)
+    if frames_dormido > FRAMES_ALERTA:
+        grosor = 6 if int(time.time() * 2) % 2 == 0 else 3
+        cv2.rectangle(frame, (0,0), (w-1,h-1), (0,0,255), grosor)
 
     cv2.imshow('Detector de Somnolencia', frame)
 

@@ -5,7 +5,7 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.regularizers import l2
 
-IMG_SIZE   = (64, 64, 3)  # ← 3 canales RGB obligatorio
+IMG_SIZE   = (64, 64, 3) 
 NUM_CLASES = 2
 
 def construir_modelo():

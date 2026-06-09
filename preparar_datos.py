@@ -5,16 +5,10 @@ import os
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from collections import Counter
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
 
 IMG_SIZE = (64, 64)
 DATASET_DIR = 'dataset'
 
-# ============================================================
-# MEDIAPIPE — solo para el detector en tiempo real
-# ============================================================
 
 mp_face   = mp.solutions.face_mesh
 face_mesh = mp_face.FaceMesh(
@@ -33,10 +27,6 @@ def calcular_EAR(landmarks, indices, w, h):
     C = np.linalg.norm(np.array(puntos[0]) - np.array(puntos[3]))
     return (A + B) / (2.0 * C)
 
-# ============================================================
-# GENERADORES — carga directa sin procesar con MediaPipe
-# El dataset ya tiene las imágenes listas para usar
-# ============================================================
 
 def crear_generadores(batch_size=32):
 
@@ -79,9 +69,6 @@ def crear_generadores(batch_size=32):
 
     return train_gen, val_gen
 
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == '__main__':
 

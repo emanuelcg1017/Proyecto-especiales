@@ -9,18 +9,10 @@ from tensorflow.keras.callbacks import (
 from preparar_datos import crear_generadores
 from construir_modelo import construir_modelo
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
-
 BATCH_SIZE    = 32
 EPOCHS        = 50
 LEARNING_RATE = 0.0001
 RUTA_MODELO   = 'modelos/detector_somnolencia.h5'
-
-# ============================================================
-# ENTRENAMIENTO
-# ============================================================
 
 print('Cargando datos...')
 train_gen, val_gen = crear_generadores(batch_size=BATCH_SIZE)
@@ -68,9 +60,6 @@ history = model.fit(
     verbose         = 1
 )
 
-# ============================================================
-# GRÁFICAS
-# ============================================================
 
 fig, axes = plt.subplots(1, 2, figsize=(14,5))
 

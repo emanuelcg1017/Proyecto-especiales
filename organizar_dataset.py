@@ -2,50 +2,28 @@ import os
 import random
 import shutil
 
-# ============================================================
-# RUTAS
-# ============================================================
-
 SOURCE_DIR = r"C:\Users\emanu\OneDrive\Desktop\archive (1)\Driver Drowsiness Dataset (DDD)"
 DEST_DIR = r"dataset"
-
-# ============================================================
-# MAPEO DE CLASES (IMPORTANTE 🔥)
-# ============================================================
 
 MAPEO = {
     "Drowsy": "dormido",
     "Non Drowsy": "alerta"
 }
 
-# ============================================================
-# PORCENTAJES
-# ============================================================
-
 TRAIN_SPLIT = 0.70
 VAL_SPLIT = 0.15
 TEST_SPLIT = 0.15
 
-# ============================================================
-# LIMPIAR DATASET ANTES
-# ============================================================
-
 if os.path.exists(DEST_DIR):
     shutil.rmtree(DEST_DIR)
 
-# ============================================================
-# CREAR CARPETAS
-# ============================================================
 
 for split in ["train", "val", "test"]:
     for clase in MAPEO.values():
         os.makedirs(os.path.join(DEST_DIR, split, clase), exist_ok=True)
 
-# ============================================================
-# ORGANIZAR IMÁGENES
-# ============================================================
 
-random.seed(42)  # 🔥 importante para mezcla consistente
+random.seed(42)  
 
 for origen, destino in MAPEO.items():
 
@@ -69,10 +47,6 @@ for origen, destino in MAPEO.items():
         "val": imagenes[train_end:val_end],
         "test": imagenes[val_end:]
     }
-
-    # ========================================================
-    # COPIAR ARCHIVOS
-    # ========================================================
 
     for split, imgs in splits.items():
         for img_path in imgs:
